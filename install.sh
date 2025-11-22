@@ -11,9 +11,25 @@ echo -e "${GREEN}================================${NC}"
 echo -e "${GREEN}Claude Code Minimal API Installer${NC}"
 echo -e "${GREEN}================================${NC}\n"
 
-# Check if running as root and create user if needed
+# Function to check command exists
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+# Determine installation directory and service name based on user
 if [ "$EUID" -eq 0 ]; then
-    echo -e "${YELLOW}⚠️  Running as root - creating claude user...${NC}"
+    INSTALL_DIR="/home/claude/claude-api"
+    TARGET_USER="claude"
+else
+    INSTALL_DIR="$HOME/claude-api"
+    TARGET_USER="$USER"
+fi
+
+SERVICE_NAME="claude-api"
+
+# ROOT SECTION - System-level installations
+if [ "$EUID" -eq 0 ]; then
+    echo -e "${YELLOW}⚠️  Running as root - performing system-level setup...${NC}\n"
 
     # Create claude user if doesn't exist
     if ! id -u claude >/dev/null 2>&1; then
@@ -23,57 +39,88 @@ if [ "$EUID" -eq 0 ]; then
         echo -e "${GREEN}✅ User 'claude' already exists${NC}"
     fi
 
-    # Re-run script as claude user
-    echo -e "${YELLOW}Re-running installer as claude user...${NC}\n"
+    # 1. Check and install Python 3
+    echo -e "\n${YELLOW}1️⃣ Checking Python 3...${NC}"
+    if command_exists python3; then
+        PYTHON_VERSION=$(python3 --version)
+        echo -e "${GREEN}✅ $PYTHON_VERSION found${NC}"
+    else
+        echo -e "${RED}❌ Python 3 not found. Installing...${NC}"
+        apt update
+        apt install -y python3 python3-pip python3-venv
+    fi
+
+    # 2. Check and install Node.js
+    echo -e "\n${YELLOW}2️⃣ Checking Node.js...${NC}"
+    if command_exists node; then
+        NODE_VERSION=$(node --version)
+        echo -e "${GREEN}✅ Node.js $NODE_VERSION found${NC}"
+    else
+        echo -e "${RED}❌ Node.js not found. Installing...${NC}"
+        curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+        apt install -y nodejs
+    fi
+
+    # 3. Install git
+    echo -e "\n${YELLOW}3️⃣ Checking git...${NC}"
+    if command_exists git; then
+        echo -e "${GREEN}✅ git already installed${NC}"
+    else
+        echo -e "${YELLOW}Installing git...${NC}"
+        apt update && apt install -y git
+    fi
+
+    # 4. Install Claude CLI
+    echo -e "\n${YELLOW}4️⃣ Installing Claude CLI...${NC}"
+    if command_exists claude; then
+        CLAUDE_VERSION=$(claude --version 2>&1 | head -1)
+        echo -e "${GREEN}✅ Claude CLI already installed: $CLAUDE_VERSION${NC}"
+    else
+        echo -e "${YELLOW}Installing Claude CLI globally...${NC}"
+        npm install -g @anthropic-ai/claude-cli
+        echo -e "${GREEN}✅ Claude CLI installed${NC}"
+    fi
+
+    # 5. Create systemd service (as root, before user switch)
+    echo -e "\n${YELLOW}5️⃣ Creating systemd service...${NC}"
+    cat > /etc/systemd/system/${SERVICE_NAME}.service << EOF
+[Unit]
+Description=Claude Code Minimal API Service
+After=network.target
+
+[Service]
+Type=simple
+User=claude
+WorkingDirectory=${INSTALL_DIR}
+Environment="PATH=${INSTALL_DIR}/venv/bin:/usr/local/bin:/usr/bin:/bin"
+ExecStart=${INSTALL_DIR}/venv/bin/python3 ${INSTALL_DIR}/minimal_server.py
+Restart=always
+RestartSec=10
+StandardOutput=append:${INSTALL_DIR}/server.log
+StandardError=append:${INSTALL_DIR}/server.log
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    echo -e "${GREEN}✅ Systemd service created${NC}"
+
+    # 6. Enable service (but don't start yet - files don't exist)
+    echo -e "\n${YELLOW}6️⃣ Enabling service...${NC}"
+    systemctl daemon-reload
+    systemctl enable ${SERVICE_NAME}.service
+    echo -e "${GREEN}✅ Service enabled for auto-start${NC}"
+
+    # Re-run script as claude user for application setup
+    echo -e "\n${YELLOW}Switching to claude user for application setup...${NC}\n"
     exec sudo -u claude bash "$0" "$@"
 fi
 
-INSTALL_DIR="$HOME/claude-api"
-SERVICE_NAME="claude-api"
-
+# NON-ROOT SECTION - Application setup as claude user
 echo -e "${YELLOW}📁 Installation directory: $INSTALL_DIR${NC}"
 echo -e "${YELLOW}🔧 Service name: $SERVICE_NAME${NC}\n"
 
-# Function to check command exists
-command_exists() {
-    command -v "$1" >/dev/null 2>&1
-}
-
-# 1. Check and install Python 3
-echo -e "${YELLOW}1️⃣ Checking Python 3...${NC}"
-if command_exists python3; then
-    PYTHON_VERSION=$(python3 --version)
-    echo -e "${GREEN}✅ $PYTHON_VERSION found${NC}"
-else
-    echo -e "${RED}❌ Python 3 not found. Installing...${NC}"
-    sudo apt update
-    sudo apt install -y python3 python3-pip python3-venv
-fi
-
-# 2. Check and install Node.js
-echo -e "\n${YELLOW}2️⃣ Checking Node.js...${NC}"
-if command_exists node; then
-    NODE_VERSION=$(node --version)
-    echo -e "${GREEN}✅ Node.js $NODE_VERSION found${NC}"
-else
-    echo -e "${RED}❌ Node.js not found. Installing...${NC}"
-    curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-    sudo apt install -y nodejs
-fi
-
-# 3. Install Claude CLI
-echo -e "\n${YELLOW}3️⃣ Installing Claude CLI...${NC}"
-if command_exists claude; then
-    CLAUDE_VERSION=$(claude --version 2>&1 | head -1)
-    echo -e "${GREEN}✅ Claude CLI already installed: $CLAUDE_VERSION${NC}"
-else
-    echo -e "${YELLOW}Installing Claude CLI globally...${NC}"
-    sudo npm install -g @anthropic-ai/claude-cli
-    echo -e "${GREEN}✅ Claude CLI installed${NC}"
-fi
-
-# 4. Authenticate Claude CLI
-echo -e "\n${YELLOW}4️⃣ Claude CLI Authentication${NC}"
+# 7. Authenticate Claude CLI
+echo -e "${YELLOW}7️⃣ Claude CLI Authentication${NC}"
 if [ -f "$HOME/.claude/credentials.json" ]; then
     echo -e "${GREEN}✅ Claude CLI already authenticated${NC}"
 else
@@ -82,14 +129,8 @@ else
     echo -e "${YELLOW}Or set ANTHROPIC_API_KEY in .env${NC}"
 fi
 
-# 5. Clone or copy project files
-echo -e "\n${YELLOW}5️⃣ Installing project files...${NC}"
-
-# Check if git is installed
-if ! command_exists git; then
-    echo -e "${YELLOW}Installing git...${NC}"
-    sudo apt update && sudo apt install -y git
-fi
+# 8. Clone project files
+echo -e "\n${YELLOW}8️⃣ Installing project files...${NC}"
 
 # Remove old installation if exists
 if [ -d "$INSTALL_DIR" ]; then
@@ -108,20 +149,20 @@ else
     exit 1
 fi
 
-# 6. Create Python virtual environment
-echo -e "\n${YELLOW}6️⃣ Creating Python virtual environment...${NC}"
+# 9. Create Python virtual environment
+echo -e "\n${YELLOW}9️⃣ Creating Python virtual environment...${NC}"
 python3 -m venv venv
 source venv/bin/activate
 echo -e "${GREEN}✅ Virtual environment created${NC}"
 
-# 7. Install Python dependencies
-echo -e "\n${YELLOW}7️⃣ Installing Python dependencies...${NC}"
+# 10. Install Python dependencies
+echo -e "\n${YELLOW}🔟 Installing Python dependencies...${NC}"
 pip install --upgrade pip
 pip install -r requirements.txt
 echo -e "${GREEN}✅ Dependencies installed${NC}"
 
-# 8. Configure .env
-echo -e "\n${YELLOW}8️⃣ Configuring environment...${NC}"
+# 11. Configure .env
+echo -e "\n${YELLOW}1️⃣1️⃣ Configuring environment...${NC}"
 if [ ! -f ".env" ]; then
     cat > .env << EOF
 # Claude API Configuration
@@ -140,43 +181,13 @@ else
     echo -e "${GREEN}✅ .env already exists${NC}"
 fi
 
-# 9. Create systemd service
-echo -e "\n${YELLOW}9️⃣ Creating systemd service...${NC}"
-sudo tee /etc/systemd/system/${SERVICE_NAME}.service > /dev/null << EOF
-[Unit]
-Description=Claude Code Minimal API Service
-After=network.target
-
-[Service]
-Type=simple
-User=$USER
-WorkingDirectory=$INSTALL_DIR
-Environment="PATH=$INSTALL_DIR/venv/bin:/usr/local/bin:/usr/bin:/bin"
-ExecStart=$INSTALL_DIR/venv/bin/python3 $INSTALL_DIR/minimal_server.py
-Restart=always
-RestartSec=10
-StandardOutput=append:$INSTALL_DIR/server.log
-StandardError=append:$INSTALL_DIR/server.log
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-echo -e "${GREEN}✅ Systemd service created${NC}"
-
-# 10. Enable and start service
-echo -e "\n${YELLOW}🔟 Enabling service...${NC}"
-sudo systemctl daemon-reload
-sudo systemctl enable ${SERVICE_NAME}.service
-echo -e "${GREEN}✅ Service enabled for auto-start${NC}"
-
-# 11. Start service
-echo -e "\n${YELLOW}1️⃣1️⃣ Starting service...${NC}"
+# 12. Start service
+echo -e "\n${YELLOW}1️⃣2️⃣ Starting service...${NC}"
 sudo systemctl start ${SERVICE_NAME}.service
 sleep 3
 
-# 12. Check service status
-echo -e "\n${YELLOW}1️⃣2️⃣ Checking service status...${NC}"
+# 13. Check service status
+echo -e "\n${YELLOW}1️⃣3️⃣ Checking service status...${NC}"
 if sudo systemctl is-active --quiet ${SERVICE_NAME}.service; then
     echo -e "${GREEN}✅ Service is running${NC}"
 
