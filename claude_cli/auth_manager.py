@@ -90,8 +90,8 @@ class AuthManager:
             search_paths.append(Path(f"/home/{current_user}/.claude/.credentials.json"))
 
         for source_path in search_paths:
-            if source_path.exists() and source_path != self.credentials_file:
-                try:
+            try:
+                if source_path.exists() and source_path != self.credentials_file:
                     logger.info(
                         "Found credentials, copying",
                         source=str(source_path),
@@ -110,13 +110,16 @@ class AuthManager:
                     logger.info("Credentials successfully copied")
                     return True
 
-                except Exception as e:
-                    logger.warning(
-                        "Failed to copy credentials",
-                        source=str(source_path),
-                        error=str(e)
-                    )
-                    continue
+            except PermissionError:
+                logger.debug("Permission denied accessing", path=str(source_path))
+                continue
+            except Exception as e:
+                logger.warning(
+                    "Failed to copy credentials",
+                    source=str(source_path),
+                    error=str(e)
+                )
+                continue
 
         logger.warning("No valid credentials found in any location")
         return False
