@@ -1,6 +1,14 @@
 #!/bin/bash
 set -e
 
+# If script is being piped from curl, save it first and re-execute
+if [ "$0" = "bash" ] || [ "$0" = "-bash" ] || [ "$0" = "sh" ]; then
+    TEMP_SCRIPT=$(mktemp /tmp/claude-install.XXXXXX.sh)
+    cat > "$TEMP_SCRIPT"
+    chmod +x "$TEMP_SCRIPT"
+    exec bash "$TEMP_SCRIPT" "$@"
+fi
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
