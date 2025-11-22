@@ -194,13 +194,27 @@ systemctl daemon-reload
 systemctl enable ${SERVICE_NAME}.service
 echo -e "${GREEN}✅ Service enabled for auto-start${NC}"
 
-# 13. Start service
-echo -e "\n${YELLOW}1️⃣3️⃣ Starting service...${NC}"
+# 13. Final credentials check before starting service
+echo -e "\n${YELLOW}1️⃣3️⃣ Final credentials check...${NC}"
+if [ ! -f "/home/claude/.claude/.credentials.json" ]; then
+    # Try one more time to copy from root (in case user logged in during installation)
+    if [ -f "/root/.claude/.credentials.json" ]; then
+        echo -e "${YELLOW}Found root credentials, copying to claude user...${NC}"
+        mkdir -p /home/claude/.claude
+        cp /root/.claude/.credentials.json /home/claude/.claude/.credentials.json
+        chown -R claude:claude /home/claude/.claude
+        chmod 600 /home/claude/.claude/.credentials.json
+        echo -e "${GREEN}✅ Credentials copied${NC}"
+    fi
+fi
+
+# 14. Start service
+echo -e "\n${YELLOW}1️⃣4️⃣ Starting service...${NC}"
 systemctl start ${SERVICE_NAME}.service
 sleep 3
 
-# 14. Check service status
-echo -e "\n${YELLOW}1️⃣4️⃣ Checking service status...${NC}"
+# 15. Check service status
+echo -e "\n${YELLOW}1️⃣5️⃣ Checking service status...${NC}"
 if systemctl is-active --quiet ${SERVICE_NAME}.service; then
     echo -e "${GREEN}✅ Service is running${NC}"
 
