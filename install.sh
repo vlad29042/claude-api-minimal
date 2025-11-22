@@ -11,10 +11,21 @@ echo -e "${GREEN}================================${NC}"
 echo -e "${GREEN}Claude Code Minimal API Installer${NC}"
 echo -e "${GREEN}================================${NC}\n"
 
-# Check if running as root
+# Check if running as root and create user if needed
 if [ "$EUID" -eq 0 ]; then
-    echo -e "${RED}❌ Please do not run as root${NC}"
-    exit 1
+    echo -e "${YELLOW}⚠️  Running as root - creating claude user...${NC}"
+
+    # Create claude user if doesn't exist
+    if ! id -u claude >/dev/null 2>&1; then
+        useradd -m -s /bin/bash claude
+        echo -e "${GREEN}✅ User 'claude' created${NC}"
+    else
+        echo -e "${GREEN}✅ User 'claude' already exists${NC}"
+    fi
+
+    # Re-run script as claude user
+    echo -e "${YELLOW}Re-running installer as claude user...${NC}\n"
+    exec sudo -u claude bash "$0" "$@"
 fi
 
 INSTALL_DIR="$HOME/claude-api"
