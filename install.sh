@@ -142,8 +142,31 @@ else
     echo -e "${GREEN}✅ .env already exists${NC}"
 fi
 
-# 10. Create systemd service
-echo -e "\n${YELLOW}🔟 Creating systemd service...${NC}"
+# 10. Setup Claude CLI authentication
+echo -e "\n${YELLOW}🔟 Setting up Claude CLI authentication...${NC}"
+
+# Check if claude user already has credentials
+if [ -f "/home/claude/.claude/.credentials.json" ]; then
+    echo -e "${GREEN}✅ Claude user already has credentials${NC}"
+else
+    # Try to copy from root if available
+    if [ -f "/root/.claude/.credentials.json" ]; then
+        echo -e "${YELLOW}Found credentials in /root/.claude/, copying to claude user...${NC}"
+        mkdir -p /home/claude/.claude
+        cp /root/.claude/.credentials.json /home/claude/.claude/.credentials.json
+        chown -R claude:claude /home/claude/.claude
+        chmod 600 /home/claude/.claude/.credentials.json
+        echo -e "${GREEN}✅ Credentials copied from root to claude user${NC}"
+    else
+        echo -e "${YELLOW}⚠️  No Claude credentials found${NC}"
+        echo -e "${YELLOW}After installation, you need to authenticate:${NC}"
+        echo -e "${YELLOW}  Option 1: Run 'claude' and use '/login' command${NC}"
+        echo -e "${YELLOW}  Option 2: Set ANTHROPIC_API_KEY in $INSTALL_DIR/.env${NC}"
+    fi
+fi
+
+# 11. Create systemd service
+echo -e "\n${YELLOW}1️⃣1️⃣ Creating systemd service...${NC}"
 cat > /etc/systemd/system/${SERVICE_NAME}.service << EOF
 [Unit]
 Description=Claude Code Minimal API Service
@@ -165,19 +188,19 @@ WantedBy=multi-user.target
 EOF
 echo -e "${GREEN}✅ Systemd service created${NC}"
 
-# 11. Enable service
-echo -e "\n${YELLOW}1️⃣1️⃣ Enabling service...${NC}"
+# 12. Enable service
+echo -e "\n${YELLOW}1️⃣2️⃣ Enabling service...${NC}"
 systemctl daemon-reload
 systemctl enable ${SERVICE_NAME}.service
 echo -e "${GREEN}✅ Service enabled for auto-start${NC}"
 
-# 12. Start service
-echo -e "\n${YELLOW}1️⃣2️⃣ Starting service...${NC}"
+# 13. Start service
+echo -e "\n${YELLOW}1️⃣3️⃣ Starting service...${NC}"
 systemctl start ${SERVICE_NAME}.service
 sleep 3
 
-# 13. Check service status
-echo -e "\n${YELLOW}1️⃣3️⃣ Checking service status...${NC}"
+# 14. Check service status
+echo -e "\n${YELLOW}1️⃣4️⃣ Checking service status...${NC}"
 if systemctl is-active --quiet ${SERVICE_NAME}.service; then
     echo -e "${GREEN}✅ Service is running${NC}"
 
