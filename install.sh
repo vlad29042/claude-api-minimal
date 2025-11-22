@@ -74,7 +74,7 @@ if command_exists claude; then
     echo -e "${GREEN}✅ Claude CLI already installed: $CLAUDE_VERSION${NC}"
 else
     echo -e "${YELLOW}Installing Claude CLI globally...${NC}"
-    npm install -g @anthropic-ai/claude-cli
+    npm install -g @anthropic-ai/claude-code
     echo -e "${GREEN}✅ Claude CLI installed${NC}"
 fi
 
