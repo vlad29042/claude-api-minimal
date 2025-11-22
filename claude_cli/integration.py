@@ -358,7 +358,9 @@ class ClaudeProcessManager:
         # Wait for process to complete
         return_code = await process.wait()
 
-        if return_code != 0:
+        # Check if we have a result message even if process failed
+        # (auth errors return code 1 but include a proper result message)
+        if return_code != 0 and not result:
             stderr = await process.stderr.read()
             error_msg = stderr.decode("utf-8", errors="replace")
             logger.error(
