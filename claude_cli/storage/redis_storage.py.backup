@@ -1,0 +1,388 @@
+"""Redis-based session storage with connection pooling and graceful degradation."""
+
+import asyncio
+import logging
+from typing import Optional, Dict, Any
+from datetime import timedelta
+
+try:
+    import redis.asyncio as redis
+    from redis.asyncio.connection import ConnectionPool
+    REDIS_AVAILABLE = True
+except ImportError:
+    REDIS_AVAILABLE = False
+    redis = None
+    ConnectionPool = None
+
+logger = logging.getLogger(__name__)
+
+
+class RedisSessionStorage:
+    """
+    Redis-based session storage with async support, connection pooling,
+    and graceful degradation to in-memory fallback.
+
+    Features:
+    - Async/await API
+    - Connection pooling with configurable pool size
+    - Automatic reconnection on connection failures
+    - Graceful degradation to in-memory storage
+    - Configurable TTL for session data
+    - Comprehensive logging
+    """
+
+    def __init__(
+        self,
+        host: str = "localhost",
+        port: int = 6379,
+        db: int = 0,
+        password: Optional[str] = None,
+        max_connections: int = 10,
+        socket_timeout: float = 5.0,
+        socket_connect_timeout: float = 5.0,
+        default_ttl: int = 3600,
+        key_prefix: str = "claude_cli:session:",
+        enable_fallback: bool = True,
+    ):
+        """
+        Initialize Redis session storage.
+
+        Args:
+            host: Redis server host
+            port: Redis server port
+            db: Redis database number
+            password: Redis password (optional)
+            max_connections: Maximum number of connections in pool
+            socket_timeout: Socket timeout in seconds
+            socket_connect_timeout: Socket connection timeout in seconds
+            default_ttl: Default TTL for session data in seconds
+            key_prefix: Prefix for all Redis keys
+            enable_fallback: Enable fallback to in-memory storage on Redis failure
+        """
+        self.host = host
+        self.port = port
+        self.db = db
+        self.password = password
+        self.max_connections = max_connections
+        self.socket_timeout = socket_timeout
+        self.socket_connect_timeout = socket_connect_timeout
+        self.default_ttl = default_ttl
+        self.key_prefix = key_prefix
+        self.enable_fallback = enable_fallback
+
+        self._pool: Optional[ConnectionPool] = None
+        self._client: Optional[redis.Redis] = None
+        self._is_connected = False
+        self._fallback_storage: Dict[str, Any] = {}
+        self._lock = asyncio.Lock()
+
+        # Check if redis is available
+        if not REDIS_AVAILABLE:
+            logger.warning(
+                "redis package not installed. Install with: pip install 'redis[hiredis]>=5.0.0'"
+            )
+            if not enable_fallback:
+                raise ImportError("redis package required but not installed")
+
+    async def connect(self) -> bool:
+        """
+        Establish connection to Redis server.
+
+        Returns:
+            True if connected successfully, False otherwise
+        """
+        if not REDIS_AVAILABLE:
+            logger.warning("Redis not available, using fallback storage")
+            return False
+
+        try:
+            async with self._lock:
+                if self._is_connected and self._client:
+                    return True
+
+                logger.info(
+                    f"Connecting to Redis at {self.host}:{self.port} (db={self.db})"
+                )
+
+                # Create connection pool
+                self._pool = ConnectionPool(
+                    host=self.host,
+                    port=self.port,
+                    db=self.db,
+                    password=self.password,
+                    max_connections=self.max_connections,
+                    socket_timeout=self.socket_timeout,
+                    socket_connect_timeout=self.socket_connect_timeout,
+                    decode_responses=True,
+                )
+
+                # Create Redis client
+                self._client = redis.Redis(connection_pool=self._pool)
+
+                # Test connection
+                await self._client.ping()
+
+                self._is_connected = True
+                logger.info("Successfully connected to Redis")
+                return True
+
+        except Exception as e:
+            logger.error(f"Failed to connect to Redis: {e}")
+            self._is_connected = False
+
+            if self.enable_fallback:
+                logger.info("Falling back to in-memory storage")
+                return False
+            else:
+                raise
+
+    async def disconnect(self) -> None:
+        """Close Redis connection and cleanup resources."""
+        async with self._lock:
+            if self._client:
+                try:
+                    await self._client.aclose()
+                    logger.info("Redis connection closed")
+                except Exception as e:
+                    logger.error(f"Error closing Redis connection: {e}")
+                finally:
+                    self._client = None
+
+            if self._pool:
+                try:
+                    await self._pool.aclose()
+                except Exception as e:
+                    logger.error(f"Error closing connection pool: {e}")
+                finally:
+                    self._pool = None
+
+            self._is_connected = False
+
+    def _make_key(self, key: str) -> str:
+        """Generate full Redis key with prefix."""
+        return f"{self.key_prefix}{key}"
+
+    async def _ensure_connected(self) -> bool:
+        """Ensure connection is established, attempt reconnection if needed."""
+        if self._is_connected and self._client:
+            try:
+                await self._client.ping()
+                return True
+            except Exception as e:
+                logger.warning(f"Redis connection lost: {e}")
+                self._is_connected = False
+
+        # Try to reconnect
+        return await self.connect()
+
+    async def set(
+        self,
+        key: str,
+        value: str,
+        ttl: Optional[int] = None,
+    ) -> bool:
+        """
+        Store a value in Redis with optional TTL.
+
+        Args:
+            key: Storage key
+            value: Value to store (will be stored as string)
+            ttl: Time-to-live in seconds (uses default_ttl if not specified)
+
+        Returns:
+            True if stored successfully, False otherwise
+        """
+        ttl = ttl if ttl is not None else self.default_ttl
+        redis_key = self._make_key(key)
+
+        # Try Redis first
+        if await self._ensure_connected():
+            try:
+                await self._client.setex(
+                    redis_key,
+                    timedelta(seconds=ttl),
+                    value,
+                )
+                logger.debug(f"Stored key '{key}' in Redis with TTL {ttl}s")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to store key '{key}' in Redis: {e}")
+                self._is_connected = False
+
+        # Fallback to in-memory storage
+        if self.enable_fallback:
+            self._fallback_storage[key] = value
+            logger.debug(f"Stored key '{key}' in fallback storage")
+            return True
+
+        return False
+
+    async def get(self, key: str) -> Optional[str]:
+        """
+        Retrieve a value from Redis.
+
+        Args:
+            key: Storage key
+
+        Returns:
+            Stored value or None if not found
+        """
+        redis_key = self._make_key(key)
+
+        # Try Redis first
+        if await self._ensure_connected():
+            try:
+                value = await self._client.get(redis_key)
+                if value is not None:
+                    logger.debug(f"Retrieved key '{key}' from Redis")
+                    return value
+            except Exception as e:
+                logger.error(f"Failed to retrieve key '{key}' from Redis: {e}")
+                self._is_connected = False
+
+        # Fallback to in-memory storage
+        if self.enable_fallback:
+            value = self._fallback_storage.get(key)
+            if value is not None:
+                logger.debug(f"Retrieved key '{key}' from fallback storage")
+            return value
+
+        return None
+
+    async def delete(self, key: str) -> bool:
+        """
+        Delete a value from Redis.
+
+        Args:
+            key: Storage key
+
+        Returns:
+            True if deleted successfully, False otherwise
+        """
+        redis_key = self._make_key(key)
+
+        # Try Redis first
+        if await self._ensure_connected():
+            try:
+                result = await self._client.delete(redis_key)
+                logger.debug(f"Deleted key '{key}' from Redis (existed: {result > 0})")
+
+                # Also remove from fallback if present
+                if self.enable_fallback and key in self._fallback_storage:
+                    del self._fallback_storage[key]
+
+                return True
+            except Exception as e:
+                logger.error(f"Failed to delete key '{key}' from Redis: {e}")
+                self._is_connected = False
+
+        # Fallback to in-memory storage
+        if self.enable_fallback and key in self._fallback_storage:
+            del self._fallback_storage[key]
+            logger.debug(f"Deleted key '{key}' from fallback storage")
+            return True
+
+        return False
+
+    async def exists(self, key: str) -> bool:
+        """
+        Check if a key exists in Redis.
+
+        Args:
+            key: Storage key
+
+        Returns:
+            True if key exists, False otherwise
+        """
+        redis_key = self._make_key(key)
+
+        # Try Redis first
+        if await self._ensure_connected():
+            try:
+                result = await self._client.exists(redis_key)
+                logger.debug(f"Checked existence of key '{key}' in Redis: {result > 0}")
+                return result > 0
+            except Exception as e:
+                logger.error(f"Failed to check key '{key}' in Redis: {e}")
+                self._is_connected = False
+
+        # Fallback to in-memory storage
+        if self.enable_fallback:
+            exists = key in self._fallback_storage
+            logger.debug(f"Checked existence of key '{key}' in fallback storage: {exists}")
+            return exists
+
+        return False
+
+    async def clear(self) -> bool:
+        """
+        Clear all session data with the configured prefix.
+
+        Returns:
+            True if cleared successfully, False otherwise
+        """
+        # Try Redis first
+        if await self._ensure_connected():
+            try:
+                # Use SCAN to find and delete all keys with prefix
+                pattern = f"{self.key_prefix}*"
+                deleted_count = 0
+
+                async for key in self._client.scan_iter(match=pattern, count=100):
+                    await self._client.delete(key)
+                    deleted_count += 1
+
+                logger.info(f"Cleared {deleted_count} keys from Redis with prefix '{self.key_prefix}'")
+
+                # Also clear fallback
+                if self.enable_fallback:
+                    self._fallback_storage.clear()
+
+                return True
+            except Exception as e:
+                logger.error(f"Failed to clear Redis storage: {e}")
+                self._is_connected = False
+
+        # Fallback to in-memory storage
+        if self.enable_fallback:
+            count = len(self._fallback_storage)
+            self._fallback_storage.clear()
+            logger.info(f"Cleared {count} keys from fallback storage")
+            return True
+
+        return False
+
+    async def get_stats(self) -> Dict[str, Any]:
+        """
+        Get storage statistics.
+
+        Returns:
+            Dictionary with storage statistics
+        """
+        stats = {
+            "redis_connected": self._is_connected,
+            "fallback_enabled": self.enable_fallback,
+            "fallback_keys": len(self._fallback_storage),
+        }
+
+        if await self._ensure_connected():
+            try:
+                info = await self._client.info("stats")
+                stats.update({
+                    "redis_version": await self._client.info("server").get("redis_version"),
+                    "total_connections": info.get("total_connections_received"),
+                    "total_commands": info.get("total_commands_processed"),
+                })
+            except Exception as e:
+                logger.error(f"Failed to get Redis stats: {e}")
+
+        return stats
+
+    async def __aenter__(self):
+        """Async context manager entry."""
+        await self.connect()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Async context manager exit."""
+        await self.disconnect()
