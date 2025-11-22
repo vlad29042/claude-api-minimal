@@ -82,26 +82,31 @@ else
     echo -e "${YELLOW}Or set ANTHROPIC_API_KEY in .env${NC}"
 fi
 
-# 5. Create installation directory
-echo -e "\n${YELLOW}5️⃣ Creating installation directory...${NC}"
-mkdir -p "$INSTALL_DIR"
-cd "$INSTALL_DIR"
+# 5. Clone or copy project files
+echo -e "\n${YELLOW}5️⃣ Installing project files...${NC}"
 
-# Copy project files
-echo -e "${YELLOW}Copying project files...${NC}"
-if [ -d "/mnt/c/Users/vlad2/PycharmProjects/cladius/project" ]; then
-    # If running from WSL with access to Windows files
-    cp -r /mnt/c/Users/vlad2/PycharmProjects/cladius/project/* "$INSTALL_DIR/"
-elif [ -f "$(dirname "$0")/minimal_server.py" ]; then
-    # If running from project directory
-    cp -r "$(dirname "$0")"/* "$INSTALL_DIR/"
-else
-    echo -e "${RED}❌ Project files not found${NC}"
-    echo -e "${YELLOW}Please manually copy project files to: $INSTALL_DIR${NC}"
-    exit 1
+# Check if git is installed
+if ! command_exists git; then
+    echo -e "${YELLOW}Installing git...${NC}"
+    sudo apt update && sudo apt install -y git
 fi
 
-echo -e "${GREEN}✅ Project files copied${NC}"
+# Remove old installation if exists
+if [ -d "$INSTALL_DIR" ]; then
+    echo -e "${YELLOW}Removing old installation...${NC}"
+    rm -rf "$INSTALL_DIR"
+fi
+
+# Clone from GitHub
+echo -e "${YELLOW}Cloning from GitHub...${NC}"
+if git clone https://github.com/vlad29042/claude-api-minimal.git "$INSTALL_DIR"; then
+    echo -e "${GREEN}✅ Project files installed${NC}"
+    cd "$INSTALL_DIR"
+else
+    echo -e "${RED}❌ Failed to clone repository${NC}"
+    echo -e "${YELLOW}Please check your internet connection${NC}"
+    exit 1
+fi
 
 # 6. Create Python virtual environment
 echo -e "\n${YELLOW}6️⃣ Creating Python virtual environment...${NC}"
