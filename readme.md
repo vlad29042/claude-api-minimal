@@ -97,6 +97,8 @@ CLAUDE_MAX_TURNS=50
 
 ### Аутентификация Claude CLI
 
+API автоматически пытается найти credentials Claude CLI. Если не сработало, используйте один из вариантов:
+
 **Вариант A: API ключ Anthropic**
 ```bash
 echo "ANTHROPIC_API_KEY=sk-ant-..." >> .env
@@ -104,7 +106,32 @@ echo "ANTHROPIC_API_KEY=sk-ant-..." >> .env
 
 **Вариант B: Локальная подписка (бесплатно)**
 ```bash
+# Если вы установили через install.sh и уже залогинены
+sudo -u claude claude  # запустите как пользователь claude
+# Внутри Claude CLI выполните:
+/login
+
+# Или аутентифицируйтесь через токен
 claude setup-token
+```
+
+**Вариант C: Ручное копирование credentials (если уже есть)**
+```bash
+# Если у вас уже есть credentials в ~/.claude/.credentials.json
+sudo mkdir -p /home/claude/.claude
+sudo cp ~/.claude/.credentials.json /home/claude/.claude/
+sudo chown claude:claude /home/claude/.claude/.credentials.json
+sudo chmod 600 /home/claude/.claude/.credentials.json
+sudo systemctl restart claude-api
+```
+
+**❓ Проверка аутентификации:**
+```bash
+# Проверить наличие credentials
+ls -la /home/claude/.claude/.credentials.json
+
+# Проверить логи на ошибки аутентификации
+sudo journalctl -u claude-api -f | grep -i auth
 ```
 
 ## 📋 API Endpoints
@@ -218,6 +245,83 @@ curl http://localhost:8001/health
 - Claude CLI
 - Anthropic API key или локальная подписка
 
+## 🔍 Troubleshooting
+
+### Ошибка: "Claude CLI is not authenticated"
+
+Это означает, что API не может найти credentials для Claude CLI.
+
+**Решение 1: Проверьте наличие credentials**
+```bash
+ls -la /home/claude/.claude/.credentials.json
+```
+
+Если файла нет:
+
+**Решение 2: Скопируйте существующие credentials**
+```bash
+# Если у вас уже есть credentials (вы залогинены в Claude CLI)
+sudo mkdir -p /home/claude/.claude
+sudo cp ~/.claude/.credentials.json /home/claude/.claude/
+sudo chown claude:claude /home/claude/.claude/.credentials.json
+sudo chmod 600 /home/claude/.claude/.credentials.json
+sudo systemctl restart claude-api
+```
+
+**Решение 3: Создайте новые credentials**
+```bash
+# Запустите Claude CLI от имени пользователя claude
+sudo -u claude claude
+
+# Внутри CLI выполните:
+/login
+
+# Следуйте инструкциям для входа
+```
+
+**Решение 4: Используйте API ключ Anthropic**
+```bash
+# Добавьте в .env файл
+echo "ANTHROPIC_API_KEY=sk-ant-ваш-ключ-здесь" | sudo tee -a /home/claude/claude-api/.env
+sudo systemctl restart claude-api
+```
+
+### Проверка работоспособности
+
+```bash
+# 1. Проверьте статус сервиса
+sudo systemctl status claude-api
+
+# 2. Проверьте логи
+sudo journalctl -u claude-api -n 50 --no-pager
+
+# 3. Проверьте health endpoint
+curl http://localhost:8001/health
+
+# 4. Сделайте тестовый запрос
+curl -X POST http://localhost:8001/api/v1/chat \
+  -H "Authorization: Bearer $(grep CLAUDE_API_KEY /home/claude/claude-api/.env | cut -d= -f2)" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "Hi", "user_id": 1}'
+```
+
+### Сервис не запускается
+
+```bash
+# Проверьте детальные логи
+sudo journalctl -u claude-api -xe
+
+# Проверьте права доступа
+ls -la /home/claude/claude-api/
+
+# Проверьте что Claude CLI установлен
+which claude
+claude --version
+
+# Переустановите Claude CLI если нужно
+sudo npm install -g @anthropic-ai/claude-code
+```
+
 ## 📄 Лицензия
 
 MIT License - используйте свободно.
@@ -226,6 +330,7 @@ MIT License - используйте свободно.
 
 - [Claude Code](https://claude.com/claude-code)
 - [Anthropic API](https://docs.anthropic.com/)
+- [GitHub Repository](https://github.com/vlad29042/claude-api-minimal)
 
 ---
 
