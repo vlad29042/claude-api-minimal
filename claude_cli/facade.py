@@ -115,6 +115,33 @@ class ClaudeIntegration:
                     continue_session=should_continue,
                     stream_callback=on_stream,
                 )
+
+                # Handle authentication errors with automatic retry
+                if response.is_error and response.error_type == "auth_error":
+                    logger.warning("Authentication error detected, attempting credential recovery")
+
+                    # Try to recover credentials
+                    if self.process_manager.auth_manager.handle_auth_error():
+                        logger.info("Credentials recovered, retrying command")
+
+                        # Retry the command once
+                        response = await self.process_manager.execute_command(
+                            prompt=prompt,
+                            working_directory=working_directory,
+                            session_id=claude_session_id,
+                            continue_session=should_continue,
+                            stream_callback=on_stream,
+                        )
+
+                        # If still failing, provide helpful error message
+                        if response.is_error and response.error_type == "auth_error":
+                            response.content = self.process_manager.auth_manager.get_auth_instructions()
+                            logger.error("Authentication retry failed", instructions=response.content)
+                    else:
+                        # Max retries reached
+                        response.content = self.process_manager.auth_manager.get_auth_instructions()
+                        logger.error("Max authentication retries reached", instructions=response.content)
+
             except ClaudeSessionError as e:
                 logger.warning("Session invalid, creating new session", error=str(e))
                 if claude_session_id:

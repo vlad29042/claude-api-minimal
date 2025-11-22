@@ -18,6 +18,7 @@ from typing import Any, AsyncIterator, Callable, Dict, List, Optional
 
 import structlog
 
+from .auth_manager import AuthManager
 from .config import ClaudeConfig
 from .exceptions import (
     ClaudeParsingError,
@@ -98,12 +99,16 @@ class ClaudeProcessManager:
         self.config = config
         self.active_processes: Dict[str, Process] = {}
         self.tool_monitor = tool_monitor
+        self.auth_manager = AuthManager()
 
         # Memory optimization settings
         self.max_message_buffer = 1000  # Limit message history
         self.streaming_buffer_size = (
             65536  # 64KB streaming buffer for large JSON messages
         )
+
+        # Ensure credentials on initialization
+        self.auth_manager.ensure_credentials()
 
     async def execute_command(
         self,
@@ -758,7 +763,7 @@ class ClaudeProcessManager:
 
                         tools_used.append(tool_entry)
 
-        return ClaudeResponse(
+        response = ClaudeResponse(
             content=result.get("result", ""),
             session_id=result.get("session_id", ""),
             cost=result.get("cost_usd", 0.0),
@@ -769,6 +774,15 @@ class ClaudeProcessManager:
             tools_used=tools_used,
             http_calls=http_calls,
         )
+
+        # Check for authentication errors
+        if response.is_error and response.content:
+            if "Invalid API key" in response.content or "Please run /login" in response.content:
+                logger.warning("Authentication error detected", error=response.content)
+                # Mark this as an auth error for retry handling
+                response.error_type = "auth_error"
+
+        return response
 
     async def kill_all_processes(self) -> None:
         """Kill all active processes."""
