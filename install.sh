@@ -23,18 +23,10 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-INSTALL_DIR="/home/claude/claude-api"
+INSTALL_DIR="/root/claude-api"
 SERVICE_NAME="claude-api"
 
 echo -e "${YELLOW}⚠️  Running as root - performing system-level setup...${NC}\n"
-
-# Create claude user if doesn't exist
-if ! id -u claude >/dev/null 2>&1; then
-    useradd -m -s /bin/bash claude
-    echo -e "${GREEN}✅ User 'claude' created${NC}"
-else
-    echo -e "${GREEN}✅ User 'claude' already exists${NC}"
-fi
 
 # 1. Check and install Python 3
 echo -e "\n${YELLOW}1️⃣ Checking Python 3...${NC}"
@@ -85,15 +77,15 @@ if ! command_exists curl; then
 fi
 
 echo -e "\n${YELLOW}5️⃣ Claude CLI Authentication${NC}"
-if [ -f "/home/claude/.claude/credentials.json" ]; then
+if [ -f "/root/.claude/.credentials.json" ]; then
     echo -e "${GREEN}✅ Claude CLI already authenticated${NC}"
 else
     echo -e "${YELLOW}⚠️  Claude CLI not authenticated${NC}"
-    echo -e "${YELLOW}After installation, run: sudo -u claude claude setup-token${NC}"
+    echo -e "${YELLOW}After installation, run: claude setup-token${NC}"
     echo -e "${YELLOW}Or set ANTHROPIC_API_KEY in .env${NC}"
 fi
 
-# 6. Clone project files as claude user
+# 6. Clone project files
 echo -e "\n${YELLOW}6️⃣ Installing project files...${NC}"
 
 # Remove old installation if exists
@@ -102,9 +94,9 @@ if [ -d "$INSTALL_DIR" ]; then
     rm -rf "$INSTALL_DIR"
 fi
 
-# Clone from GitHub as claude user
+# Clone from GitHub
 echo -e "${YELLOW}Cloning from GitHub...${NC}"
-if su - claude -c "git clone https://github.com/vlad29042/claude-api-minimal.git $INSTALL_DIR"; then
+if git clone https://github.com/vlad29042/claude-api-minimal.git $INSTALL_DIR; then
     echo -e "${GREEN}✅ Project files installed${NC}"
 else
     echo -e "${RED}❌ Failed to clone repository${NC}"
@@ -112,20 +104,20 @@ else
     exit 1
 fi
 
-# 7. Create Python virtual environment as claude user
+# 7. Create Python virtual environment
 echo -e "\n${YELLOW}7️⃣ Creating Python virtual environment...${NC}"
-su - claude -c "cd $INSTALL_DIR && python3 -m venv venv"
+cd $INSTALL_DIR && python3 -m venv venv
 echo -e "${GREEN}✅ Virtual environment created${NC}"
 
-# 8. Install Python dependencies as claude user
+# 8. Install Python dependencies
 echo -e "\n${YELLOW}8️⃣ Installing Python dependencies...${NC}"
-su - claude -c "cd $INSTALL_DIR && source venv/bin/activate && pip install --upgrade pip && pip install -r requirements.txt"
+cd $INSTALL_DIR && source venv/bin/activate && pip install --upgrade pip && pip install -r requirements.txt
 echo -e "${GREEN}✅ Dependencies installed${NC}"
 
-# 9. Configure .env as claude user
+# 9. Configure .env
 echo -e "\n${YELLOW}9️⃣ Configuring environment...${NC}"
 if [ ! -f "$INSTALL_DIR/.env" ]; then
-    su - claude -c "cat > $INSTALL_DIR/.env << 'EOF'
+    cat > $INSTALL_DIR/.env << 'EOF'
 # Claude API Configuration
 CLAUDE_API_KEY=$(openssl rand -hex 32)
 CLAUDE_BINARY_PATH=claude
@@ -142,27 +134,15 @@ else
     echo -e "${GREEN}✅ .env already exists${NC}"
 fi
 
-# 10. Setup Claude CLI authentication
-echo -e "\n${YELLOW}🔟 Setting up Claude CLI authentication...${NC}"
-
-# Check if claude user already has credentials
-if [ -f "/home/claude/.claude/.credentials.json" ]; then
-    echo -e "${GREEN}✅ Claude user already has credentials${NC}"
+# 10. Check Claude CLI authentication
+echo -e "\n${YELLOW}🔟 Checking Claude CLI authentication...${NC}"
+if [ -f "/root/.claude/.credentials.json" ]; then
+    echo -e "${GREEN}✅ Claude CLI already authenticated${NC}"
 else
-    # Try to copy from root if available
-    if [ -f "/root/.claude/.credentials.json" ]; then
-        echo -e "${YELLOW}Found credentials in /root/.claude/, copying to claude user...${NC}"
-        mkdir -p /home/claude/.claude
-        cp /root/.claude/.credentials.json /home/claude/.claude/.credentials.json
-        chown -R claude:claude /home/claude/.claude
-        chmod 600 /home/claude/.claude/.credentials.json
-        echo -e "${GREEN}✅ Credentials copied from root to claude user${NC}"
-    else
-        echo -e "${YELLOW}⚠️  No Claude credentials found${NC}"
-        echo -e "${YELLOW}After installation, you need to authenticate:${NC}"
-        echo -e "${YELLOW}  Option 1: Run 'claude' and use '/login' command${NC}"
-        echo -e "${YELLOW}  Option 2: Set ANTHROPIC_API_KEY in $INSTALL_DIR/.env${NC}"
-    fi
+    echo -e "${YELLOW}⚠️  Claude CLI not authenticated${NC}"
+    echo -e "${YELLOW}After installation, run: claude${NC}"
+    echo -e "${YELLOW}Then use '/login' command inside Claude CLI${NC}"
+    echo -e "${YELLOW}Or set ANTHROPIC_API_KEY in $INSTALL_DIR/.env${NC}"
 fi
 
 # 11. Create systemd service
@@ -174,7 +154,7 @@ After=network.target
 
 [Service]
 Type=simple
-User=claude
+User=root
 WorkingDirectory=${INSTALL_DIR}
 Environment="PATH=${INSTALL_DIR}/venv/bin:/usr/local/bin:/usr/bin:/bin"
 ExecStart=${INSTALL_DIR}/venv/bin/python3 ${INSTALL_DIR}/minimal_server.py
@@ -194,27 +174,13 @@ systemctl daemon-reload
 systemctl enable ${SERVICE_NAME}.service
 echo -e "${GREEN}✅ Service enabled for auto-start${NC}"
 
-# 13. Final credentials check before starting service
-echo -e "\n${YELLOW}1️⃣3️⃣ Final credentials check...${NC}"
-if [ ! -f "/home/claude/.claude/.credentials.json" ]; then
-    # Try one more time to copy from root (in case user logged in during installation)
-    if [ -f "/root/.claude/.credentials.json" ]; then
-        echo -e "${YELLOW}Found root credentials, copying to claude user...${NC}"
-        mkdir -p /home/claude/.claude
-        cp /root/.claude/.credentials.json /home/claude/.claude/.credentials.json
-        chown -R claude:claude /home/claude/.claude
-        chmod 600 /home/claude/.claude/.credentials.json
-        echo -e "${GREEN}✅ Credentials copied${NC}"
-    fi
-fi
-
-# 14. Start service
-echo -e "\n${YELLOW}1️⃣4️⃣ Starting service...${NC}"
+# 13. Start service
+echo -e "\n${YELLOW}1️⃣3️⃣ Starting service...${NC}"
 systemctl start ${SERVICE_NAME}.service
 sleep 3
 
-# 15. Check service status
-echo -e "\n${YELLOW}1️⃣5️⃣ Checking service status...${NC}"
+# 14. Check service status
+echo -e "\n${YELLOW}1️⃣4️⃣ Checking service status...${NC}"
 if systemctl is-active --quiet ${SERVICE_NAME}.service; then
     echo -e "${GREEN}✅ Service is running${NC}"
 
@@ -252,15 +218,15 @@ echo -e "  Journal logs:    ${GREEN}journalctl -u $SERVICE_NAME -f${NC}"
 
 echo -e "\n${YELLOW}🧪 Test API:${NC}"
 echo -e "  Health check:    ${GREEN}curl http://localhost:8001/health${NC}"
-echo -e "  Run tests:       ${GREEN}cd $INSTALL_DIR && sudo -u claude bash -c 'source venv/bin/activate && python3 test_server.py'${NC}"
+echo -e "  Run tests:       ${GREEN}cd $INSTALL_DIR && source venv/bin/activate && python3 test_server.py${NC}"
 
 echo -e "\n${YELLOW}⚙️  Configuration:${NC}"
 echo -e "  Edit config:     ${GREEN}nano $INSTALL_DIR/.env${NC}"
 echo -e "  After changes:   ${GREEN}systemctl restart $SERVICE_NAME${NC}"
 
-if [ ! -f "/home/claude/.claude/credentials.json" ]; then
+if [ ! -f "/root/.claude/.credentials.json" ]; then
     echo -e "\n${RED}⚠️  IMPORTANT: Claude CLI not authenticated!${NC}"
-    echo -e "${YELLOW}Run: sudo -u claude claude setup-token${NC}"
+    echo -e "${YELLOW}Run: claude setup-token${NC}"
     echo -e "${YELLOW}Or set ANTHROPIC_API_KEY in .env${NC}"
 fi
 
